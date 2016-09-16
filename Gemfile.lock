@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    mdata (0.1)
+    xdata (0.1)
       charlock_holmes (~> 0.6)
       curses (~> 1.0)
       dbf (~> 2.0)
@@ -30,7 +30,7 @@ DEPENDENCIES
   charlock_holmes
   faraday
   georuby
-  mdata!
+  xdata!
 
 BUNDLED WITH
    1.12.5

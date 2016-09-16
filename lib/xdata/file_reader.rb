@@ -5,6 +5,9 @@ require 'geo_ruby/geojson'
 require 'charlock_holmes'
 require 'tmpdir'
 
+# feature = source_factory.point(1266457.58, 230052.50)
+# feature = RGeo::Feature.cast(feature,:factory => wgs84_factory, :project => true)
+
 module XData
 
   class FileReader
@@ -19,6 +22,7 @@ module XData
 
     def initialize(pars)
       @params = pars
+      
       file_path = File.expand_path(@params[:file_path])
       if File.extname(file_path) == '.xdata'
         read_xdata(file_path)
@@ -46,6 +50,9 @@ module XData
       guess_srid unless @params[:srid]
       find_unique_field  unless @params[:unique_id]
       get_address unless @params[:hasaddress]
+      
+      findExtends unless @params[:bounds]
+      
       set_id_name
     end
 
@@ -138,11 +145,8 @@ module XData
         end
         lon = g[0]
         lat = g[1]
-        # if lon > -180.0 and lon < 180.0 and lat > -90.0 and lat < 90.0
-        #   @params[:srid] = 4326
-        # else
         if lon.between?(-7000.0,300000.0) and lat.between?(289000.0,629000.0)
-          # Dutch new rd system
+          # Simple minded check for Dutch new rd system
           @params[:srid] = 28992
         end
       else
@@ -222,6 +226,18 @@ module XData
       end
       {}
     end
+    
+    def findExtends
+      return unless @params[:hasgeometry]
+      geometries = []
+      @content.each do |o|
+        o[:geometry][:type] = 'MultiPolygon' if o[:geometry][:type] == 'Multipolygon'
+        geometries << Geometry.from_geojson(o[:geometry].to_json)
+      end
+      geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
+      @params[:bounds] = geom.bounding_box()
+    end
+    
 
     def find_geometry(xfield=nil, yfield=nil)
       delete_column = (@params[:keep_geom] != true)
@@ -289,6 +305,8 @@ module XData
       if xfield and yfield and (xfield != yfield)
         @params[:hasgeometry] = [xfield,yfield].to_s
         @content.each do |h|
+          h[:properties][:data][xfield] = h[:properties][:data][xfield] || ''
+          h[:properties][:data][yfield] = h[:properties][:data][yfield] || ''
           h[:geometry] = {:type => 'Point', :coordinates => [h[:properties][:data][xfield].gsub(',','.').to_f, h[:properties][:data][yfield].gsub(',','.').to_f]}
           h[:properties][:data].delete(yfield) if delete_column
           h[:properties][:data].delete(xfield) if delete_column
@@ -340,7 +358,7 @@ module XData
           index += 1
         end
       rescue => e
-        raise CitySDK::Exception.new("Read CSV; line #{index}; #{e.message}")
+        raise XData::Exception.new("Read CSV; line #{index}; #{e.message}")
       end
       find_geometry
     end
@@ -352,7 +370,7 @@ module XData
       File.open(path, "r:bom|utf-8") do |fd|
         raw = fd.read
       end
-      hash = CitySDK::parse_json(raw)
+      hash = XData::parse_json(raw)
 
       if hash.is_a?(Hash) and hash[:type] and (hash[:type] == 'FeatureCollection')
         # GeoJSON
@@ -391,7 +409,7 @@ module XData
         connection = Faraday.new :url => "http://prj2epsg.org"
         resp = connection.get('/search.json', {:mode => 'wkt', :terms => str})
         if resp.status.between?(200, 299)
-          resp = CitySDK::parse_json resp.body
+          resp = XData::parse_json resp.body
           @params[:srid] = resp[:codes][0][:code].to_i
         end
       rescue
@@ -412,7 +430,7 @@ module XData
       GeoRuby::Shp4r::ShpFile.open(path) do |shp|
         shp.each do |shape|
           h = {}
-          h[:geometry] = CitySDK::parse_json(shape.geometry.to_json) #a GeoRuby SimpleFeature
+          h[:geometry] = XData::parse_json(shape.geometry.to_json) #a GeoRuby SimpleFeature
           h[:properties] = {:data => {}}
           att_data = shape.data #a Hash
           shp.fields.each do |field|
@@ -433,8 +451,8 @@ module XData
 
     def read_zip(path)
       begin
-        Dir.mktmpdir("cdkfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
-          raise CitySDK::Exception.new("Error unzipping #{path}.", {:originalfile => path}, __FILE__, __LINE__) if not system "unzip '#{path}' -d '#{dir}' > /dev/null 2>&1"
+        Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
+          raise XData::Exception.new("Error unzipping #{path}.", {:originalfile => path}, __FILE__, __LINE__) if not system "unzip '#{path}' -d '#{dir}' > /dev/null 2>&1"
           if File.directory?(dir + '/' + File.basename(path).chomp(File.extname(path)))
             dir = dir + '/' + File.basename(path).chomp(File.extname(path) )
           end
@@ -454,14 +472,14 @@ module XData
           end
         end
       rescue Exception => e
-        raise CitySDK::Exception.new(e.message, {:originalfile => path}, __FILE__, __LINE__)
+        raise XData::Exception.new(e.message, {:originalfile => path}, __FILE__, __LINE__)
       end
-      raise CitySDK::Exception.new("Could not proecess file #{path}", {:originalfile => path}, __FILE__, __LINE__)
+      raise XData::Exception.new("Could not proecess file #{path}", {:originalfile => path}, __FILE__, __LINE__)
     end
 
     def write(path=nil)
       path = @file_path if path.nil?
-      path = path + '.csdk'
+      path = path + '.xdata'
       begin
         File.open(path,"w") do |fd|
           fd.write( Marshal.dump({:config=>@params, :content=>@content}) )

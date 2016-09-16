@@ -13,7 +13,7 @@ Gem::Specification.new do |gem|
   gem.homepage      = "http://waag.org"
   gem.licenses      = ['MIT']
 
-  gem.files         = `git ls-files`.split($/)
+  gem.files         = `git ls-files`.split($/) - ["xdata.gemspec"]
   gem.executables   = ['xdata']
   # gem.test_files    = gem.files.grep(%r{^(test|spec|features)/})
   gem.require_paths = ["lib"]

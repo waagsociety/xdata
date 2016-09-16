@@ -4,14 +4,13 @@ require "yaml"
 require "xdata"
 require "curses"
 include Curses
+include XData 
 
 include GeoRuby::SimpleFeatures
 
 
 $outheight = 0
 $outwidth = 0
-
-$credentials_hash = {}
 
 ############# convenience ####################################################
 
@@ -113,10 +112,6 @@ end
 ############# files ##########################################################
 
 def doExit
-  File.open($configFile, "w")  do |f|
-    f.write($credentials_hash.to_json)
-    f.write("\n")
-  end
   close_screen
   exit!(0)
 end
@@ -126,15 +121,10 @@ def loadConfig
   if File.exists?(f)
     naf = {}
     $file_hash = JSON.parse(File.read(f), symbolize_names: true)
-    $file_hash[:password] = $credentials_hash[:password]
-    $file_hash[:host] = $credentials_hash[:host]
-    $file_hash[:login] = $credentials_hash[:login]
     $file_hash[:fields].map! { |f| (f.to_sym rescue f) || f }
-    $file_hash[:original_fields].map! { |f| (f.to_sym rescue f) || f }
     $file_hash[:alternate_fields].each { |k,v| naf[(k.to_sym rescue k) || k] = v }
     $file_hash[:alternate_fields] = naf
     $file_reader.setId_Name
-    # log JSON.pretty_generate($file_hash)
   end
 end  
   
@@ -144,21 +134,10 @@ def saveConfig
   f = $file_hash[:file_path].gsub(/\.\w+$/,'.cfg')
   File.open(f,"w") do |fd|
     fh = $file_hash.deep_copy
-    fh[:password] = '***'
     fd.write(JSON.pretty_generate(fh))
   end
 end
 
-def findExtends
-  return unless $file_reader && $file_hash[:hasgeometry]
-  geometries = []
-  $file_reader.content.each do |o|
-    o[:geometry][:type] = 'MultiPolygon' if o[:geometry][:type] == 'Multipolygon'
-    geometries << Geometry.from_geojson(o[:geometry].to_json)
-  end
-  $geom = GeometryCollection.from_geometries(geometries, ($file_hash[:srid] || '4326'))
-  $file_hash[:bounds] = $geom.bounding_box()
-end
 
 def saveFile
   return unless $file_reader
@@ -220,7 +199,7 @@ def showSample
     end
     $outwin.clear
     $outwin.setpos(1,0)
-    $outwin.addstr formatObject(o).to_yaml # JSON.pretty_generate(formatObject(o))
+    $outwin.addstr formatObject(o).to_yaml
     $outwin.refresh
   rescue => e
     sherror("Error: #{e.message}")
@@ -258,23 +237,25 @@ end
 
 def loadFile(filePath=nil)
   $file_reader = nil
+
   if filePath.nil?
-    return cancelled unless get_input("file path", :file_path, $credentials_hash ,1)
+    return cancelled unless get_input("file path", :file_path, $file_hash ,1)
   else 
     $file_hash[:file_path] = filePath
   end
-  begin 
-    $file_hash = $file_hash.merge $credentials_hash.dup
+
+  begin
     $file_hash[:keep_geom] = true
     $file_hash[:file_path] = File.expand_path($file_hash[:file_path])
     $file_reader = FileReader.new($file_hash)
+
     if $file_hash[:fields][$file_hash[:fields].length-1] == nil
       $file_hash[:fields] = $file_hash[:fields].clip
-      $file_hash[:original_fields] = $file_hash[:original_fields].clip
     end
-    fileSummary(0)
-    findExtends
-    $outwin.refresh
+    if $outwin
+      fileSummary(0)
+      $outwin.refresh
+    end
   rescue => e
     sherror("Error reading file: #{e.inspect}")
   end
@@ -324,9 +305,9 @@ def assignGeometry
   unless (x.blank? and y.blank?)
     $file_reader.find_geometry(x.to_sym, y.to_sym)
     $file_reader.guess_srid
+    $file_reader.findExtends
   end
   $outwin.clear
-  findExtends
   fileSummary(1)
   $outwin.refresh
 end
@@ -517,7 +498,7 @@ end
 def banner
   clear
   setpos(0,0)
-  addstr "File Check, interactive console. "
+  addstr "XData interactive; file is: #{$file_hash[:file_path]}"
   setpos(1,0)
 end
 
@@ -543,11 +524,14 @@ end
 
 
 def sherror(e)
-  setpos(Curses.lines-1,1)
-  clrtoeol
-  addstr($error=e)
-  refresh
-  log $error unless $error.blank?
+  if $outwin
+    setpos(Curses.lines-1,1)
+    clrtoeol
+    addstr($error=e)
+    refresh
+  else 
+    jsonlog({:exept => e})
+  end
   false
 end
 
@@ -592,17 +576,10 @@ end
 
 
 
-$configFile = File.expand_path("~/.fa")
 $outwin = nil
 $error = nil
 $file_hash = {}
 
-if File.exists? $configFile
-  begin 
-    $credentials_hash = JSON.parse( File.read($configFile), symbolize_names: true)
-  rescue
-  end
-end
 
 $fileMenu = Menu.new( [
   MenuItem.new('1','load & analyse', lambda{loadFile}),
@@ -614,15 +591,16 @@ $fileMenu = Menu.new( [
   MenuItem.new('q','exit', lambda { doExit } )
 ])
 
+trap(:INT) do  
+  doExit
+end  
+
 
 $command = ARGV.shift
 $file = ARGV.shift
 
-if $command.nil? || $file.nil?
-  trap(:INT) do  
-    doExit
-  end  
-  loadFile($command) if $file.nil?
+if $command.blank? || $file.blank?
+  loadFile($command) if $command
   init_screen
   nl
   noecho

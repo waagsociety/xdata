@@ -1,12 +1,11 @@
 #!/usr/bin/env ruby
 
 require 'zlib'
-require 'base64'
 require 'stringio'
 
 class PC4
-  data = File.read(File.dirname(__FILE__) + "/pc4.b64")
-  @@pc = Marshal.load(Zlib::GzipReader.new(StringIO.new(Base64.decode64(data))).read)
+  data = File.read(File.dirname(__FILE__) + "/pc4.gz")
+  @@pc = Marshal.load(Zlib::GzipReader.new(StringIO.new(data)).read)
   data = nil
   def self.lookup(str)
     str = str.gsub(/[^\d]/,'').downcase
