@@ -1,0 +1,36 @@
+PATH
+  remote: .
+  specs:
+    mdata (0.1)
+      charlock_holmes (~> 0.6)
+      curses (~> 1.0)
+      dbf (~> 2.0)
+      faraday (~> 0.8)
+      georuby (~> 2.0)
+      i18n (~> 0.7)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    charlock_holmes (0.7.3)
+    curses (1.0.2)
+    dbf (2.0.13)
+      fastercsv (~> 1.5)
+    faraday (0.9.2)
+      multipart-post (>= 1.2, < 3)
+    fastercsv (1.5.5)
+    georuby (2.5.2)
+    i18n (0.7.0)
+    multipart-post (2.0.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  charlock_holmes
+  faraday
+  georuby
+  mdata!
+
+BUNDLED WITH
+   1.12.5

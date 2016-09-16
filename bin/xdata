@@ -1,0 +1,643 @@
+#!/usr/bin/env ruby
+
+require "yaml"
+require "xdata"
+require "curses"
+include Curses
+
+include GeoRuby::SimpleFeatures
+
+
+$outheight = 0
+$outwidth = 0
+
+$credentials_hash = {}
+
+############# convenience ####################################################
+
+class Array
+  def sharedStart
+    a = self.sort
+    w1 = a[0]
+    w2 = a[-1]
+    l = w1.length
+    i = 0
+    while(i < l and w1[i] == w2[i])
+      i += 1
+    end
+    w1[0...i]
+  end
+
+  def clip n=1
+    take size - n
+  end
+end
+
+
+class GeoRuby::SimpleFeatures::Point
+  def bounding_box
+    return [self.class.from_x_y_z(x, y, z), self.class.from_x_y_z(x, y, z)] if with_z
+    [self.class.from_x_y(x, y), self.class.from_x_y(x, y)]
+  end
+end
+
+############# menus ##########################################################
+
+class MenuItem
+  attr_accessor :t, :c, :k
+  def initialize(key,text,command,*args)
+    @k = key
+    @t = text
+    @c = command
+    @a = args.flatten
+  end
+  def call
+    (@a.length > 0) ? @c.call(@a) : @c.call
+  end
+end
+
+$currentMenu = nil
+
+class Menu
+  def initialize(items)
+    @items = items
+  end
+  
+  def replace(n,i)
+    @items[n]=i
+  end
+  
+  def run(outwinproc = nil)
+    $currentMenu = self
+    $vpos = 3
+    banner
+    @items.each do |i|
+      setpos($vpos,1)
+      addstr(" #{i.k}: #{i.t}") 
+      $vpos+=1
+    end
+    $vpos+=1
+    setpos($vpos,1)
+    addstr("please select")
+    setpos($vpos+1,0)
+    addstr("-" * Curses.cols)
+
+    $outwin.close if $outwin
+    $outheight = Curses.lines - $vpos - 3
+    $outwidth = Curses.cols
+    $outwin=Curses::Window.new( $outheight, $outwidth, $vpos+2, 1 )
+    $outwin.refresh
+    outwinproc.call if outwinproc
+
+    curs_set(0)
+    while true
+      noecho
+      c = getch
+      @items.each do |i|
+        if i.k == c
+          sherror('')
+          $outwin.clear
+          i.call 
+          setpos($vpos,1)
+          clrtoeol
+          addstr("please select")
+          refresh
+          break
+        end
+      end
+    end
+  end
+end
+
+
+############# files ##########################################################
+
+def doExit
+  File.open($configFile, "w")  do |f|
+    f.write($credentials_hash.to_json)
+    f.write("\n")
+  end
+  close_screen
+  exit!(0)
+end
+
+def loadConfig
+  f = $file_hash[:file_path].gsub(/\.\w+$/,'.cfg')
+  if File.exists?(f)
+    naf = {}
+    $file_hash = JSON.parse(File.read(f), symbolize_names: true)
+    $file_hash[:password] = $credentials_hash[:password]
+    $file_hash[:host] = $credentials_hash[:host]
+    $file_hash[:login] = $credentials_hash[:login]
+    $file_hash[:fields].map! { |f| (f.to_sym rescue f) || f }
+    $file_hash[:original_fields].map! { |f| (f.to_sym rescue f) || f }
+    $file_hash[:alternate_fields].each { |k,v| naf[(k.to_sym rescue k) || k] = v }
+    $file_hash[:alternate_fields] = naf
+    $file_reader.setId_Name
+    # log JSON.pretty_generate($file_hash)
+  end
+end  
+  
+
+def saveConfig
+  return unless $file_reader
+  f = $file_hash[:file_path].gsub(/\.\w+$/,'.cfg')
+  File.open(f,"w") do |fd|
+    fh = $file_hash.deep_copy
+    fh[:password] = '***'
+    fd.write(JSON.pretty_generate(fh))
+  end
+end
+
+def findExtends
+  return unless $file_reader && $file_hash[:hasgeometry]
+  geometries = []
+  $file_reader.content.each do |o|
+    o[:geometry][:type] = 'MultiPolygon' if o[:geometry][:type] == 'Multipolygon'
+    geometries << Geometry.from_geojson(o[:geometry].to_json)
+  end
+  $geom = GeometryCollection.from_geometries(geometries, ($file_hash[:srid] || '4326'))
+  $file_hash[:bounds] = $geom.bounding_box()
+end
+
+def saveFile
+  return unless $file_reader
+  r = {}
+  started = false
+  return cancelled unless get_input("Please enter file name",:fn,r,1)
+  if r[:fn]
+    f = File.expand_path(r[:fn])
+    File.open(f,"w") do |fd|
+      fd.write('{"type": "FeatureCollection", "features": ['+"\n")
+      $file_reader.content.each do |o|
+        fd.write(",") if started
+        started = true
+        fd.write(formatObject(o).to_json)
+        fd.write("\n")
+      end
+      fd.write('] }')
+    end
+  end
+end
+
+
+def formatObject(o)
+  begin 
+    tp = {}
+    # log JSON.pretty_generate($file_hash)
+    o[:properties][:data].each do |k,v|
+      if $file_hash[:fields].include?(k) 
+        k2 = $file_hash[:alternate_fields][k]
+        k2 = k if k2.blank?
+        tp[k2] = v 
+      end
+    end
+    o[:properties][:data] = tp
+    
+    if $file_hash[:srid] and $file_hash[:srid] != 4326
+      o[:crs] = {
+        type: 'EPSG',
+        properties: {
+          code: $file_hash[:srid]
+        }
+      }
+    end
+  rescue => e
+    sherror("Error: #{e.message}")
+  end
+  o
+end
+
+def showSample
+  return unless $file_reader
+  begin 
+    o = $file_reader.content[rand($file_reader.content.length)].deep_copy
+    # log JSON.pretty_generate(o)
+    if o[:geometry] and o[:geometry].class == Hash
+      o[:geometry][:coordinates] = ['...'] if  o[:geometry][:coordinates] and o[:geometry][:type] != 'Point'
+    else
+      o[:geometry] = nil
+    end
+    $outwin.clear
+    $outwin.setpos(1,0)
+    $outwin.addstr formatObject(o).to_yaml # JSON.pretty_generate(formatObject(o))
+    $outwin.refresh
+  rescue => e
+    sherror("Error: #{e.message}")
+  end
+end
+
+
+def fileSummary(vp)
+  
+  $outwin.setpos(vp+=1,0)
+  $outwin.addstr sprintf("%14s #{$file_hash[:file_path]}", "file:")
+
+  $outwin.setpos(vp+=1,0)
+  $outwin.addstr sprintf("%14s #{$file_hash[:rowcount]}", "total rows:")
+  
+  $outwin.setpos(vp+=1,0)
+  $outwin.addstr sprintf("%14s #{$file_hash[:unique_id].to_s}","unique id:")
+  
+  if $file_hash[:postcode]
+    $outwin.setpos(vp+=1,0)
+    $outwin.addstr sprintf("%14s #{$file_hash[:postcode]}","postcode in:")
+  end
+
+  if $file_hash[:housenumber]
+    $outwin.setpos(vp+=1,0)
+    $outwin.addstr sprintf("%14s #{$file_hash[:housenumber]}","address/number in:")
+  end
+  
+  if $file_hash[:hasgeometry]
+    $outwin.setpos(vp+=1,0)
+    $outwin.addstr sprintf("%14s found in %s; srid: #{$file_hash[:srid]}","geometry:",$file_hash[:hasgeometry])
+  end
+  vp
+end
+
+def loadFile(filePath=nil)
+  $file_reader = nil
+  if filePath.nil?
+    return cancelled unless get_input("file path", :file_path, $credentials_hash ,1)
+  else 
+    $file_hash[:file_path] = filePath
+  end
+  begin 
+    $file_hash = $file_hash.merge $credentials_hash.dup
+    $file_hash[:keep_geom] = true
+    $file_hash[:file_path] = File.expand_path($file_hash[:file_path])
+    $file_reader = FileReader.new($file_hash)
+    if $file_hash[:fields][$file_hash[:fields].length-1] == nil
+      $file_hash[:fields] = $file_hash[:fields].clip
+      $file_hash[:original_fields] = $file_hash[:original_fields].clip
+    end
+    fileSummary(0)
+    findExtends
+    $outwin.refresh
+  rescue => e
+    sherror("Error reading file: #{e.inspect}")
+  end
+end
+
+def editFields
+  props = $file_reader.content[rand($file_reader.content.length)][:properties][:data]
+  $file_hash[:fields] = []
+  $file_hash[:alternate_fields]  = {}
+  $file_hash[:original_fields].each do |f|
+    $file_hash[:fields] << f
+  end
+  
+  $outwin.clear
+  outAddstr(1, "For each field, please choose Accept, Rename or Ignore")
+  vp = 3
+  accepted_fields = []
+  accepted_fields << $file_hash[:unique_id]
+  curs_set(2)
+  $file_hash[:fields].each do |f|
+    outAddstr(vp,sprintf("-- sample: #{props[f]} --")) 
+    field = getFieldHeader(vp+2,0,sprintf("Field: '#{f}'; (a/r/i) "),f)
+    return cancelled if field == 27
+    if field
+      accepted_fields << f 
+      $file_hash[:alternate_fields][f] = field
+    end
+  end
+  curs_set(0)
+  $file_hash[:fields] = accepted_fields.uniq
+  $file_reader.guess_name
+  $file_reader.get_address
+  $outwin.clear
+  fileSummary(1)
+  $outwin.refresh
+end
+
+
+############# utils ##########################################################
+
+
+def assignGeometry
+  list = $file_hash[:fields].map {|f| $file_hash[:alternate_fields][f].to_s}
+  $outwin.clear
+  x = get_input_from_list('please select x (longitude) field: ', list , 3)
+  y = get_input_from_list('       select y (latitude) field: ', list , 3)
+  unless (x.blank? and y.blank?)
+    $file_reader.find_geometry(x.to_sym, y.to_sym)
+    $file_reader.guess_srid
+  end
+  $outwin.clear
+  findExtends
+  fileSummary(1)
+  $outwin.refresh
+end
+
+def assignAddress
+  list = $layer[:fields].map {|f| f[:name]}
+  $outwin.clear
+  x = get_input_from_list('please select x (longitude) field: ', list , 3)
+  y = get_input_from_list('       select y (latitude) field: ', list , 3)
+  unless (x.blank? and y.blank?)
+  end
+end
+
+
+
+def getFieldHeader(v,h,s,f)
+  a = ''
+  $outwin.setpos(v,h)
+  $outwin.clrtoeol
+  $outwin.addstr s
+  $outwin.refresh
+  
+  a = charIn(["A","a","R","r","I","i"])
+  return 27 if a.ord == 27
+  
+  case a.downcase
+  when 'a'
+    return f
+  when 'i'
+    return nil
+  when 'r'
+    $outwin.setpos(v,h)
+    $outwin.clrtoeol
+    $outwin.addstr "Replacement name for field '#{f}': "
+    $outwin.refresh
+    echo
+    s = $outwin.getstr
+    noecho
+    s
+  end
+end
+
+
+def isTrue?(o)
+  return true if 
+  (o == true) or 
+  (o =~ /^y$/i) or 
+  (o =~ /^t$/i) or 
+  (o =~ /^true$/i) or 
+  (o =~ /^yes$/i) or 
+  (o =~ /^j$/i) or 
+  (o =~ /^ja$/i)
+  false
+end
+
+def cancelled
+  outMessage("Cancelled...")
+end
+
+def showMatches(l,v)
+  $outwin.clear
+  l.each do |i|
+    $outwin.setpos(v+=1,0)
+    $outwin.addstr("- #{i}") 
+  end
+  $outwin.refresh
+end
+
+def get_input_from_list(prompt, list, vp, res = '')
+  # 259 up
+  # 258 dn
+  udindex = -1
+  matchl = list
+  prv = inp = nil
+  curs_set(1)
+  $outwin.keypad(true)
+  while true
+    $outwin.setpos(vp,0)
+    $outwin.clrtoeol
+    $outwin.addstr("#{prompt} -> #{res}") 
+    $outwin.refresh
+    prv = inp
+    inp = $outwin.getch
+
+    case inp.ord
+      
+    when 259 # up
+      if udindex == -1
+        matchl = list.select { |i| i.starts_with?(res) }  
+        udindex = 0
+      end
+      res = matchl[udindex -= 1] if (udindex > 0)
+    when 258 # down
+      if udindex == -1
+        matchl = list.select { |i| i.starts_with?(res) } 
+        udindex = 0
+      end
+      res = matchl[udindex += 1] if (udindex <  matchl.length-1)
+    when 27
+      outMessage("Cancelled")
+      $outwin.keypad(false)
+      return ''
+    when 9
+      if prv.ord == 9
+        showMatches(matchl,vp+1)
+      else
+        matchl = list.select { |i| i.starts_with?(res)}
+        res = matchl.sharedStart if matchl[0]
+        udindex = -1
+      end
+    when 10,13
+      break
+    when 127,8
+      udindex = -1
+      res = res[0...-1]
+    else
+      udindex = -1
+      res << inp if (inp.ord > 31)
+    end
+  end
+  $outwin.keypad(false)
+  curs_set(0)
+  res
+end
+
+
+def self.get_string_array(prompt,vp)
+  ret = []
+  echo
+  tempwin=$outwin.subwin( $outheight - vp - 2, $outwidth-2, $vpos+vp+2, 2 )
+  tempwin.setpos(1,1)
+  tempwin.addstr(prompt)
+  vp = 2
+  tempwin.setpos(vp,1)
+  loop do
+    tempwin.setpos(vp,1)
+    tempwin.addstr("-> ")
+    tempwin.refresh
+    s = tempwin.getstr
+    break if s.length == 0
+    vp += 1
+    ret << s
+  end
+  noecho
+  tempwin.clear
+  tempwin.close
+  $outwin.refresh
+  ret
+end
+
+
+def get_input(prompt, symbol, hash, vp, defs=nil)
+  res = defs ? defs : ''
+  echo
+  curs_set(1)
+  $outwin.keypad(true)
+
+  while true
+    if hash[symbol] and symbol != :password
+      outAddstr(vp,"#{prompt} (#{hash[symbol]}) -> #{res}") 
+    else
+      outAddstr(vp,"#{prompt} -> #{res}") 
+    end
+    $outwin.refresh
+    inp = $outwin.getch
+    case inp.ord
+    when 27
+      outMessage("Cancelled")
+      return false
+    when 10,13
+      break
+    when 127,8
+      res = res[0...-1]
+    else
+      res << inp if (inp.ord > 31)
+    end
+  end
+
+  curs_set(0)
+  noecho
+  hash[symbol] = res.strip if res.length > 0
+  $outwin.keypad(false)
+  true
+end
+
+
+
+def banner
+  clear
+  setpos(0,0)
+  addstr "File Check, interactive console. "
+  setpos(1,0)
+end
+
+def runFromTop
+  $fileMenu.run
+end
+
+def yesNo?(p,v=nil)
+  $outwin.setpos(v,0) if v
+  $outwin.addstr("#{p} ") 
+  $outwin.refresh
+  ['Y','y','j','J'].include? $outwin.getch
+end
+
+
+
+def outAddstr(v,s)
+  $outwin.setpos(v,0)
+  $outwin.clrtoeol
+  $outwin.addstr(s)
+  $outwin.refresh
+end
+
+
+def sherror(e)
+  setpos(Curses.lines-1,1)
+  clrtoeol
+  addstr($error=e)
+  refresh
+  log $error unless $error.blank?
+  false
+end
+
+def log(m)
+  File.open(File.expand_path('~/fa.log'), "a")  do |f|
+    f.write("#{m}\n")
+  end
+end
+
+
+def not_yet
+  outMessage("Not yet implemented") 
+end
+
+def charIn(arr)
+  a = $outwin.getch
+  while !(arr.include?(a) or a.ord == 27)
+    a = $outwin.getch
+  end
+  a
+end
+
+def outObject(o,v,h)
+  arr = o.to_yaml.split("\n")
+  arr.each do |a|
+    $outwin.setpos(v+=1,h)
+    $outwin.addstr a.strip
+  end
+end
+
+def outMessage(m)
+  $outwin.clear
+  $outwin.setpos(1,0)
+  $outwin.addstr m
+  $outwin.refresh
+end
+
+
+
+
+############# run!! ##########################################################
+
+
+
+$configFile = File.expand_path("~/.fa")
+$outwin = nil
+$error = nil
+$file_hash = {}
+
+if File.exists? $configFile
+  begin 
+    $credentials_hash = JSON.parse( File.read($configFile), symbolize_names: true)
+  rescue
+  end
+end
+
+$fileMenu = Menu.new( [
+  MenuItem.new('1','load & analyse', lambda{loadFile}),
+  MenuItem.new('2','rename fields', lambda{editFields}),
+  MenuItem.new('3','show sample', lambda{showSample}),
+  MenuItem.new('4','assign geom columns', lambda { assignGeometry }),
+  MenuItem.new('s','save processed file', lambda { saveFile }),
+  MenuItem.new('c','save config', lambda { saveConfig }),
+  MenuItem.new('q','exit', lambda { doExit } )
+])
+
+
+$command = ARGV.shift
+$file = ARGV.shift
+
+if $command.nil? || $file.nil?
+  trap(:INT) do  
+    doExit
+  end  
+  loadFile($command) if $file.nil?
+  init_screen
+  nl
+  noecho
+  runFromTop
+else # command and file
+  loadFile($file) 
+  case $command
+  when 'bounds'
+    JSON.pretty_generate($file_hash[:bounds] || '[]')
+    exit(0)
+  else
+    STDERR.puts "command not found: #{$command}"
+    exit(-1)
+  end
+end
+
+
+
