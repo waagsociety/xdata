@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 
 require "yaml"
-require "xdata"
 require "curses"
+require "getoptlong"
 include Curses
+require_relative '../lib/xdata.rb'
 include XData 
 
 include GeoRuby::SimpleFeatures
@@ -244,7 +245,7 @@ def loadFile(filePath=nil)
     $file_hash[:file_path] = filePath
   end
 
-  begin
+  # begin
     $file_hash[:keep_geom] = true
     $file_hash[:file_path] = File.expand_path($file_hash[:file_path])
     $file_reader = FileReader.new($file_hash)
@@ -256,9 +257,9 @@ def loadFile(filePath=nil)
       fileSummary(0)
       $outwin.refresh
     end
-  rescue => e
-    sherror("Error reading file: #{e.inspect}")
-  end
+  # rescue => e
+  #   sherror("Error reading file: #{e.inspect}")
+  # end
 end
 
 def editFields
@@ -596,26 +597,72 @@ trap(:INT) do
 end  
 
 
-$command = ARGV.shift
-$file = ARGV.shift
+def printHelp
+  STDERR.puts 'HELP!'
+  doExit
+end
 
-if $command.blank? || $file.blank?
-  loadFile($command) if $command
+opts = GetoptLong.new(
+  [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+  [ '--bounds', '-b', GetoptLong::NO_ARGUMENT ],
+  [ '--summary', '-s', GetoptLong::NO_ARGUMENT ],
+  [ '--csv', '-c', GetoptLong::OPTIONAL_ARGUMENT ],
+  [ '--geojson', '-g', GetoptLong::OPTIONAL_ARGUMENT ]
+)
+
+
+$command = []
+$csvOut = nil
+$geoOut = nil
+
+
+opts.each do |opt, arg|
+  case opt
+    when '--help'
+      printHelp()
+    when '--bounds'
+      $command << :bounds
+    when '--summary'
+      $command << :summary
+    when '--csv'
+      if arg == ''
+        $csvOut = ''
+      else
+        $csvOut = arg
+      end
+    when '--geojson'
+      if arg == ''
+        $geoOut = ''
+      else
+        $geoOut = arg
+      end
+  end
+end
+
+$file = ARGV.shift if (ARGV.length == 1)
+loadFile($file) if $file
+
+
+if $command.blank?
   init_screen
   nl
   noecho
   runFromTop
-else # command and file
-  loadFile($file) 
-  case $command
-  when 'bounds'
-    JSON.pretty_generate($file_hash[:bounds] || '[]')
+else
+  case $command[0]
+  when :summary
+    puts JSON.pretty_generate($file_hash)
     exit(0)
+  when :bounds
+    if $file_hash[:bounds]
+      puts JSON.pretty_generate($file_hash[:bounds])
+      exit(0)
+    else
+      STDERR.puts "No geography or postcodes found in file."
+    end
   else
-    STDERR.puts "command not found: #{$command}"
     exit(-1)
   end
 end
-
 
 

@@ -228,14 +228,26 @@ module XData
     end
     
     def findExtends
-      return unless @params[:hasgeometry]
       geometries = []
-      @content.each do |o|
-        o[:geometry][:type] = 'MultiPolygon' if o[:geometry][:type] == 'Multipolygon'
-        geometries << Geometry.from_geojson(o[:geometry].to_json)
+      if @params[:hasgeometry]
+        @content.each do |o|
+          o[:geometry][:type] = 'MultiPolygon' if o[:geometry][:type] == 'Multipolygon'
+          geometries << Geometry.from_geojson(o[:geometry].to_json)
+        end
+        geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
+        @params[:bounds] = geom.bounding_box()
+      elsif @params[:postcode]
+        pc = @params[:postcode].to_sym
+        @content.each do |o|
+          p2 = PC4.lookup(o[:properties][:data][pc])
+          if p2
+            geometries << GeoRuby::SimpleFeatures::Point.from_coordinates(p2[0], (@params[:srid] || '4326'))
+            geometries << GeoRuby::SimpleFeatures::Point.from_coordinates(p2[1], (@params[:srid] || '4326'))
+          end
+        end
+        geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
+        @params[:bounds] = geom.bounding_box()
       end
-      geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
-      @params[:bounds] = geom.bounding_box()
     end
     
 
