@@ -81,10 +81,7 @@ module XData
           h[:properties][:title] = h[:properties][:data][@params[:name]] if @params[:name]
         end
       else
-        @params[:unique_id] = :csdk_gen
-        # @params[:fields] << :csdk_gen
-        # @params[:original_fields] << :csdk_gen
-        # @params[:alternate_fields][:csdk_gen] = :csdk_gen
+        @params[:unique_id] = :xdata_gen
         @content.each do |h|
           h[:properties][:id] = "cg_#{count}"
           h[:properties][:title] = h[:properties][:data][@params[:name]] if @params[:name]

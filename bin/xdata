@@ -264,12 +264,6 @@ end
 
 def editFields
   props = $file_reader.content[rand($file_reader.content.length)][:properties][:data]
-  $file_hash[:fields] = []
-  $file_hash[:alternate_fields]  = {}
-  $file_hash[:original_fields].each do |f|
-    $file_hash[:fields] << f
-  end
-  
   $outwin.clear
   outAddstr(1, "For each field, please choose Accept, Rename or Ignore")
   vp = 3
@@ -280,13 +274,9 @@ def editFields
     outAddstr(vp,sprintf("-- sample: #{props[f]} --")) 
     field = getFieldHeader(vp+2,0,sprintf("Field: '#{f}'; (a/r/i) "),f)
     return cancelled if field == 27
-    if field
-      accepted_fields << f 
-      $file_hash[:alternate_fields][f] = field
-    end
+    $file_hash[:alternate_fields][f] = field
   end
   curs_set(0)
-  $file_hash[:fields] = accepted_fields.uniq
   $file_reader.guess_name
   $file_reader.get_address
   $outwin.clear
@@ -664,5 +654,4 @@ else
     exit(-1)
   end
 end
-
 
