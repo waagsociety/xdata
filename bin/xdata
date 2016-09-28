@@ -16,6 +16,7 @@ $outwidth = 0
 ############# convenience ####################################################
 
 class Array
+  
   def sharedStart
     a = self.sort
     w1 = a[0]
@@ -250,9 +251,10 @@ def loadFile(filePath=nil)
     $file_hash[:file_path] = File.expand_path($file_hash[:file_path])
     $file_reader = FileReader.new($file_hash)
 
-    if $file_hash[:fields][$file_hash[:fields].length-1] == nil
+    if !$file_hash[:fields].blank? and $file_hash[:fields][$file_hash[:fields].length-1] == nil
       $file_hash[:fields] = $file_hash[:fields].clip
     end
+    
     if $outwin
       fileSummary(0)
       $outwin.refresh

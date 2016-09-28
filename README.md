@@ -17,6 +17,11 @@ xdata supports (zipped) shape files, geojson, csv and unformatted json files.
 
 Type 'xdata --help' for usage information.
 
+## Dependencies
+
+    GEOS 3.2
+    proj 4.7
+
 
 ## Contributing
 

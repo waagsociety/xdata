@@ -21,7 +21,7 @@ Gem::Specification.new do |gem|
   gem.add_dependency('i18n', '~> 0.7')
   gem.add_dependency('dbf', '~> 2.0')
   gem.add_dependency('georuby', '~> 2.0')
-  gem.add_dependency('faraday', '~> 0.8')
+  gem.add_dependency('rgeo', '~> 0.5')
   gem.add_dependency('charlock_holmes', '~> 0.6')
   gem.add_dependency('curses', '~> 1.0')
   

@@ -4,6 +4,6 @@ source 'https://rubygems.org'
 gemspec
 
 gem 'georuby'
-gem 'faraday'
+gem 'rgeo'
 gem 'charlock_holmes'
-
+gem 'feedjira'

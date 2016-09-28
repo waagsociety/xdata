@@ -1,15 +1,26 @@
 require 'csv'
+require 'rgeo'
+require 'tmpdir'
+require 'feedjira'
 require 'geo_ruby'
 require 'geo_ruby/shp'
 require 'geo_ruby/geojson'
 require 'charlock_holmes'
-require 'tmpdir'
+
+require 'open-uri'
+
+# wgs84_factory = RGeo::Geographic.spherical_factory(:srid => 4326, :proj4 => wgs84_proj4, :coord_sys => wgs84_wkt)
+
 
 # feature = source_factory.point(1266457.58, 230052.50)
 # feature = RGeo::Feature.cast(feature,:factory => wgs84_factory, :project => true)
 
-module XData
+# factory = RGeo::Geographic.projected_factory(:projection_proj4 => '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +units=m +no_defs ')
+# rd_factory = RGeo::Geographic.spherical_factory(:srid => 28992, :proj4 => amersfoort-rd-new)
+# curved_factory = RGeo::Geographic.spherical_factory(:srid => 4326)
 
+module XData
+   
   class FileReader
 
     RE_Y = /lat|(y.*coord)|(y.*pos.*)|(y.*loc(atie|ation)?)/i
@@ -39,6 +50,8 @@ module XData
             read_csv(file_path)
           when /\.xdata/i
             read_xdata(file_path)
+          when /\.xml/i
+            read_atom(file_path)
           else
             raise "Unknown or unsupported file type: #{ext}."
         end
@@ -125,6 +138,7 @@ module XData
     def get_fields
       @params[:fields] = []
       @params[:alternate_fields] = {}
+      return if @content.blank?
       @content[0][:properties][:data].each_key do |k|
         k = (k.to_sym rescue k) || k
         @params[:fields] << k
@@ -133,6 +147,7 @@ module XData
     end
 
     def guess_srid
+      return if @content.blank?
       return unless @content[0][:geometry] and @content[0][:geometry].class == Hash
       @params[:srid] = 4326
       g = @content[0][:geometry][:coordinates]
@@ -250,6 +265,7 @@ module XData
 
     def find_geometry(xfield=nil, yfield=nil)
       delete_column = (@params[:keep_geom] != true)
+      return if @content.blank?
       unless(xfield and yfield)
         @params[:hasgeometry] = nil
         xs = true
@@ -380,8 +396,9 @@ module XData
         raw = fd.read
       end
       hash = XData::parse_json(raw)
-
-      if hash.is_a?(Hash) and hash[:type] and (hash[:type] == 'FeatureCollection')
+      if hash.is_a?(Hash) and hash[:'odata.metadata']
+        read_odata(hash)
+      elsif hash.is_a?(Hash) and hash[:type] and (hash[:type] == 'FeatureCollection')
         # GeoJSON
         hash[:features].each do |f|
           f.delete(:type)
@@ -389,6 +406,7 @@ module XData
           @content << f
         end
         @params[:hasgeometry] = 'GeoJSON'
+
       else
         # Free-form JSON
         val,length = nil,0
@@ -424,7 +442,65 @@ module XData
       rescue
       end
     end
+  
+    def parseODataMeta(md)
+      @params[:md] = {} if @params[:md].nil?
+      @params[:md][:title] = md[:Title]
+      @params[:md][:identifier] = md[:Identifier]
+      @params[:md][:description] = md[:Description]
+      @params[:md][:abstract] = md[:ShortDescription]
+      @params[:md][:modified] = md[:Modified]
+      @params[:md][:temporal] = md[:Period]
+      @params[:md][:publisher] = md[:Source]
+      @params[:md][:accrualPeriodicity] = md[:Frequency]
+      @params[:md][:language] = md[:Language]
+    end
+  
+    def parseODataFields(props)
+      rank=1
+      @params[:md] = {} if @params[:md].nil?
+      props.each do |p|
+        @params[:md]["fieldUnit.#{rank}".to_sym] = p[:Unit]
+        @params[:md]["fieldDescription.#{rank}".to_sym] = p[:Description]
+        @params[:md]["fieldLabel.#{rank}".to_sym] = p[:Key]
+        rank += 1
+      end
+    end
 
+    def read_odata(h)
+      @content = []
+      @params[:odata] = {}
+      links = h[:value]
+      links.each do |l|
+        @params[:odata][l[:name].to_sym] = l[:url]
+      end
+      
+      begin
+        open(@params[:odata][:TableInfos]) do |f|
+          md = XData::parse_json(f.read)[:value]
+          parseODataMeta(md[0])
+        end
+
+        open(@params[:odata][:DataProperties]) do |f|
+          props = XData::parse_json(f.read)[:value]
+          parseODataFields(props)
+        end
+      
+      
+        open(@params[:odata][:TypedDataSet]) do |f|
+          c = XData::parse_json(f.read)[:value]
+          c.each do |h|
+            @content << { :properties => {:data => h} }
+          end
+        end
+      rescue OpenURI::HTTPError => e
+        STDERR.puts e.message
+      end
+
+      find_geometry
+    end
+    
+    
     def read_shapefile(path)
 
       @content = []
@@ -452,7 +528,25 @@ module XData
       end
     end
 
-    def read_csdk(path)
+    def read_atom(path)
+      atom = ''
+      File.open(path, "r:bom|utf-8") do |fd|
+        atom = fd.read
+      end
+      begin 
+        feed = Feedjira::Feed.parse(atom)
+        url = feed.entries[0].url
+        Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
+          f = dir + '/' + File.basename(path)
+          
+        end
+      rescue Exception => e
+        puts e.inspect
+        return -1
+      end
+    end
+
+    def read_xdata(path)
       h = Marshal.load(File.read(path))
       @params = h[:config]
       @content = h[:content]
