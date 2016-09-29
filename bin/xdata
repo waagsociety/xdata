@@ -247,8 +247,8 @@ def loadFile(filePath=nil)
   end
 
   # begin
+
     $file_hash[:keep_geom] = true
-    $file_hash[:file_path] = File.expand_path($file_hash[:file_path])
     $file_reader = FileReader.new($file_hash)
 
     if !$file_hash[:fields].blank? and $file_hash[:fields][$file_hash[:fields].length-1] == nil

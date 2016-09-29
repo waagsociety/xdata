@@ -1,4 +1,5 @@
 require 'csv'
+require 'cgi'
 require 'rgeo'
 require 'tmpdir'
 require 'feedjira'
@@ -20,6 +21,9 @@ require 'open-uri'
 # curved_factory = RGeo::Geographic.spherical_factory(:srid => 4326)
 
 module XData
+
+
+
    
   class FileReader
 
@@ -31,42 +35,87 @@ module XData
 
     attr_reader :file, :content,:params
 
+    def fillOut
+      @params[:rowcount] = @content.length
+      get_fields          unless @params[:fields]
+      guess_name          unless @params[:name]
+      guess_srid          unless @params[:srid]
+      find_unique_field   unless @params[:unique_id]
+      get_address         unless @params[:hasaddress]
+      findExtends         unless @params[:bounds]
+      set_id_name
+    end
+    
+    def odata_json(url)
+      if url =~ /\/ODataFeed\//
+        uri = URI.parse(url)
+        return url + '?$format=json' if uri.query.nil?
+        pars = CGI.parse(uri.query)
+        return url if pars["$format"]
+        return url + '&$format=json'
+      end
+      return url
+    end
+
+    def download()
+      data = ''
+      if @params[:file_path] =~ /\/ODataFeed\//
+        @params[:file_path] = @params[:file_path] + '?$format=json'
+        open(@params[:file_path]) do |f|
+          data = XData::parse_json(f.read)
+          read_json(nil,data)
+        end
+      else
+        open(@params[:file_path]) do |f|
+          data = f.read
+        end
+        if @params[:file_path] =~ /\.csv$/ 
+          read_csv(nil,data)
+        elsif data =~ /^\s*<\?xml/
+          read_xml(nil,data)
+        else
+          begin 
+            data = XData::parse_json(data)
+            read_json(nil,data)
+          rescue XData::Exception
+            return
+          end
+        end
+      end
+      fillOut
+    end
+    
+
     def initialize(pars)
       @params = pars
       
-      file_path = File.expand_path(@params[:file_path])
-      if File.extname(file_path) == '.xdata'
-        read_xdata(file_path)
+      if @params[:file_path] =~ /^http(s)?:\/\/.+/
+        download
       else
-        ext = @params[:originalfile] ? File.extname(@params[:originalfile]) : File.extname(file_path)
-        case ext
-          when /\.zip/i
-            read_zip(file_path)
-          when /\.(geo)?json/i
-            read_json(file_path)
-          when /\.shp/i
-            read_shapefile(file_path)
-          when /\.csv|tsv/i
-            read_csv(file_path)
-          when /\.xdata/i
-            read_xdata(file_path)
-          when /\.xml/i
-            read_atom(file_path)
-          else
-            raise "Unknown or unsupported file type: #{ext}."
+        file_path = File.expand_path(@params[:file_path])
+        if File.extname(file_path) == '.xdata'
+          read_xdata(file_path)
+        else
+          ext = @params[:originalfile] ? File.extname(@params[:originalfile]) : File.extname(file_path)
+          case ext
+            when /\.zip/i
+              read_zip(file_path)
+            when /\.(geo)?json/i
+              read_json(file_path)
+            when /\.shp/i
+              read_shapefile(file_path)
+            when /\.csv|tsv/i
+              read_csv(file_path)
+            when /\.xdata/i
+              read_xdata(file_path)
+            when /\.xml/i
+              read_xml(file_path)
+            else
+              raise "Unknown or unsupported file type: #{ext}."
+          end
         end
       end
-
-      @params[:rowcount] = @content.length
-      get_fields unless @params[:fields]
-      guess_name unless @params[:name]
-      guess_srid unless @params[:srid]
-      find_unique_field  unless @params[:unique_id]
-      get_address unless @params[:hasaddress]
-      
-      findExtends unless @params[:bounds]
-      
-      set_id_name
+      fillOut
     end
 
     def get_address
@@ -354,11 +403,11 @@ module XData
       false
     end
 
-    def read_csv(path)
-      @file = path
-      c=''
-      File.open(path, "r:bom|utf-8") do |fd|
-        c = fd.read
+    def read_csv(path, c = nil)
+      if path 
+        File.open(path, "r:bom|utf-8") do |fd|
+          c = fd.read
+        end
       end
       unless @params[:utf8_fixed]
         detect = CharlockHolmes::EncodingDetector.detect(c)
@@ -388,14 +437,19 @@ module XData
       find_geometry
     end
 
-    def read_json(path)
+    def read_json(path, hash=nil)
+      
+      STDERR.puts hash.class if hash
+      
       @content = []
-      @file = path
-      raw = ''
-      File.open(path, "r:bom|utf-8") do |fd|
-        raw = fd.read
+      if path
+        data = ''
+        File.open(path, "r:bom|utf-8") do |fd|
+          data = fd.read
+        end
+        hash = XData::parse_json(data)
       end
-      hash = XData::parse_json(raw)
+      
       if hash.is_a?(Hash) and hash[:'odata.metadata']
         read_odata(hash)
       elsif hash.is_a?(Hash) and hash[:type] and (hash[:type] == 'FeatureCollection')
@@ -476,23 +530,23 @@ module XData
       end
       
       begin
-        open(@params[:odata][:TableInfos]) do |f|
+        open(odata_json(@params[:odata][:TableInfos])) do |f|
           md = XData::parse_json(f.read)[:value]
           parseODataMeta(md[0])
         end
 
-        open(@params[:odata][:DataProperties]) do |f|
+        open(odata_json(@params[:odata][:DataProperties])) do |f|
           props = XData::parse_json(f.read)[:value]
           parseODataFields(props)
         end
-      
-      
-        open(@params[:odata][:TypedDataSet]) do |f|
+
+        open(odata_json(@params[:odata][:TypedDataSet])) do |f|
           c = XData::parse_json(f.read)[:value]
           c.each do |h|
             @content << { :properties => {:data => h} }
           end
         end
+
       rescue OpenURI::HTTPError => e
         STDERR.puts e.message
       end
@@ -504,7 +558,6 @@ module XData
     def read_shapefile(path)
 
       @content = []
-      @file = path
 
       prj = path.gsub(/.shp$/i,"") + '.prj'
       prj = File.exists?(prj) ? File.read(prj) : nil
@@ -528,17 +581,17 @@ module XData
       end
     end
 
-    def read_atom(path)
-      atom = ''
-      File.open(path, "r:bom|utf-8") do |fd|
-        atom = fd.read
+    def read_xml(path, data=nil)
+      if path
+        File.open(path, "r:bom|utf-8") do |fd|
+          data = fd.read
+        end
       end
       begin 
-        feed = Feedjira::Feed.parse(atom)
+        feed = Feedjira::Feed.parse(data)
         url = feed.entries[0].url
         Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
           f = dir + '/' + File.basename(path)
-          
         end
       rescue Exception => e
         puts e.inspect

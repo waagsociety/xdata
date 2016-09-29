@@ -1,5 +1,7 @@
 require 'json'
 require 'i18n'
+require 'net/http'
+require 'net/https'
 
 class String
   def remove_non_ascii
@@ -24,6 +26,20 @@ end
 
 module XData
   ::I18n.enforce_available_locales = false
+
+  def self.headers(url)
+    begin
+      uri = URI(url)
+      http = Net::HTTP.new(uri.host, uri.port)
+      if url =~ /^https:\/\//i
+        http.use_ssl = true
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      end
+      return http.head(uri.path.blank? ? "/" : uri.path).to_hash
+    rescue
+    end
+    nil
+  end
 
   # for debugging purposes...
   def jsonlog(o)
