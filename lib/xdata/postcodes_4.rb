@@ -8,7 +8,7 @@ class PC4
   @@pc = Marshal.load(Zlib::GzipReader.new(StringIO.new(data)).read)
   data = nil
   def self.lookup(str)
-    str = str.gsub(/[^\d]/,'').downcase
+    str = str.gsub(/[^\d]/,'')[0..3]
     bbox = @@pc[str]
     return [[bbox[0][0].unpack('e')[0], bbox[0][1].unpack('e')[0]],[bbox[1][0].unpack('e')[0], bbox[1][1].unpack('e')[0]]] if bbox
     nil

@@ -4,6 +4,7 @@ require 'rgeo'
 require 'tmpdir'
 require 'feedjira'
 require 'geo_ruby'
+require 'tempfile'
 require 'geo_ruby/shp'
 require 'geo_ruby/geojson'
 require 'charlock_holmes'
@@ -22,9 +23,6 @@ require 'open-uri'
 
 module XData
 
-
-
-   
   class FileReader
 
     RE_Y = /lat|(y.*coord)|(y.*pos.*)|(y.*loc(atie|ation)?)/i
@@ -60,8 +58,7 @@ module XData
     def download()
       data = ''
       if @params[:file_path] =~ /\/ODataFeed\//
-        @params[:file_path] = @params[:file_path] + '?$format=json'
-        open(@params[:file_path]) do |f|
+        open(odata_json(@params[:file_path])) do |f|
           data = XData::parse_json(f.read)
           read_json(nil,data)
         end
@@ -69,8 +66,10 @@ module XData
         open(@params[:file_path]) do |f|
           data = f.read
         end
-        if @params[:file_path] =~ /\.csv$/ 
+        if @params[:file_path] =~ /\.csv$/i 
           read_csv(nil,data)
+        elsif @params[:file_path] =~ /\.zip$/i 
+          read_zip(nil,data)
         elsif data =~ /^\s*<\?xml/
           read_xml(nil,data)
         else
@@ -377,7 +376,7 @@ module XData
       end
 
       if xfield and yfield and (xfield != yfield)
-        @params[:hasgeometry] = [xfield,yfield].to_s
+        @params[:hasgeometry] = [xfield,yfield]
         @content.each do |h|
           h[:properties][:data][xfield] = h[:properties][:data][xfield] || ''
           h[:properties][:data][yfield] = h[:properties][:data][yfield] || ''
@@ -391,7 +390,7 @@ module XData
         return true
       elsif (xfield and yfield)
         # factory = ::RGeo::Cartesian.preferred_factory()
-        @params[:hasgeometry] = "[#{xfield}]"
+        @params[:hasgeometry] = [xfield]
         @content.each do |h|
           h[:geometry] = geom_from_text(h[:properties][:data][xfield])
           h[:properties][:data].delete(xfield) if h[:geometry] and delete_column
@@ -409,6 +408,9 @@ module XData
           c = fd.read
         end
       end
+      
+      STDERR.puts "CSV"
+      
       unless @params[:utf8_fixed]
         detect = CharlockHolmes::EncodingDetector.detect(c)
         c =	CharlockHolmes::Converter.convert(c, detect[:encoding], 'UTF-8') if detect
@@ -604,33 +606,56 @@ module XData
       @params = h[:config]
       @content = h[:content]
     end
+    
+    
+    def proces_zipped_dir(d)
+      Dir.foreach(d) do |f|
 
-    def read_zip(path)
+        next if f =~ /^\./
+        
+        if File.directory?(d + '/' + f)
+          return true if proces_zipped_dir(d + '/' + f)
+        end
+
+        case File.extname(f)
+          when /\.(geo)?json/i
+            read_json(d+'/'+f)
+            return true
+          when /\.shp/i
+            read_shapefile(d+'/'+f)
+            return true
+          when /\.csv|tsv/i
+            read_csv(d+'/'+f)
+            return true
+        end
+      end
+      return false
+    end
+
+    def read_zip(path, data=nil)
+      tempfile = nil
       begin
+        
+        if(data)
+          tempfile = Tempfile.new('xdatazip')
+          tempfile.write(data)
+          path = tempfile.path  
+        end
+
         Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
-          raise XData::Exception.new("Error unzipping #{path}.", {:originalfile => path}, __FILE__, __LINE__) if not system "unzip '#{path}' -d '#{dir}' > /dev/null 2>&1"
+          command = "unzip '#{path}' -d '#{dir}' > /dev/null 2>&1"
+          raise XData::Exception.new("Error unzipping #{path}.", {:originalfile => path}, __FILE__, __LINE__) if not system command
           if File.directory?(dir + '/' + File.basename(path).chomp(File.extname(path)))
             dir = dir + '/' + File.basename(path).chomp(File.extname(path) )
           end
-          Dir.foreach(dir) do |f|
-            next if f =~ /^\./
-            case File.extname(f)
-              when /\.(geo)?json/i
-                read_json(dir+'/'+f)
-                return
-              when /\.shp/i
-                read_shapefile(dir+'/'+f)
-                return
-              when /\.csv|tsv/i
-                read_csv(dir+'/'+f)
-                return
-            end
-          end
+          return if proces_zipped_dir(dir)
         end
       rescue Exception => e
         raise XData::Exception.new(e.message, {:originalfile => path}, __FILE__, __LINE__)
+      ensure
+        tempfile.unlink if tempfile
       end
-      raise XData::Exception.new("Could not proecess file #{path}", {:originalfile => path}, __FILE__, __LINE__)
+      raise XData::Exception.new("Could not process file #{path}", {:originalfile => path}, __FILE__, __LINE__)
     end
 
     def write(path=nil)

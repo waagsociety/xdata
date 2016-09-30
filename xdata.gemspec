@@ -9,7 +9,7 @@ Gem::Specification.new do |gem|
   gem.authors       = ["Tom Demeyer"]
   gem.email         = ["tom@waag.org"]
   gem.description   = %q{Provides analysis of (geo)data files.}
-  gem.summary       = %q{Provides analisis of (geo)data files. Both interactive and command-driven}
+  gem.summary       = %q{Provides analisis of (geo)data files. Both interactive and command-line driven}
   gem.homepage      = "http://waag.org"
   gem.licenses      = ['MIT']
 

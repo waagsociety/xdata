@@ -114,51 +114,82 @@ end
 ############# files ##########################################################
 
 def doExit
+  saveConfig
   close_screen
   exit!(0)
 end
 
 def loadConfig
   f = $file_hash[:file_path].gsub(/\.\w+$/,'.cfg')
+  if $file_hash[:file_path] =~ /^http(s)?:\/\/.+/
+    f = File.expand_path('~') + '/.xdata/' + f.split('/')[-1]
+  end
   if File.exists?(f)
     naf = {}
     $file_hash = JSON.parse(File.read(f), symbolize_names: true)
     $file_hash[:fields].map! { |f| (f.to_sym rescue f) || f }
     $file_hash[:alternate_fields].each { |k,v| naf[(k.to_sym rescue k) || k] = v }
     $file_hash[:alternate_fields] = naf
-    $file_reader.setId_Name
   end
 end  
   
 
 def saveConfig
   return unless $file_reader
+  f = ''
   f = $file_hash[:file_path].gsub(/\.\w+$/,'.cfg')
-  File.open(f,"w") do |fd|
-    fh = $file_hash.deep_copy
-    fd.write(JSON.pretty_generate(fh))
+  if $file_hash[:file_path] =~ /^http(s)?:\/\/.+/
+    f = File.expand_path('~') + '/.xdata/' + f.split('/')[-1]
+  end
+  begin 
+    File.open(f,"w") do |fd|
+      fh = $file_hash.deep_copy
+      fd.write(JSON.pretty_generate(fh))
+      outMessage("Config saved at #{f}.")
+    end
+  rescue
+    outMessage("Failed to save config at #{f}.")
   end
 end
 
 
-def saveFile
+def saveFileCSV(path=nil)
   return unless $file_reader
-  r = {}
-  started = false
-  return cancelled unless get_input("Please enter file name",:fn,r,1)
-  if r[:fn]
-    f = File.expand_path(r[:fn])
-    File.open(f,"w") do |fd|
-      fd.write('{"type": "FeatureCollection", "features": ['+"\n")
-      $file_reader.content.each do |o|
-        fd.write(",") if started
-        started = true
-        fd.write(formatObject(o).to_json)
-        fd.write("\n")
-      end
-      fd.write('] }')
-    end
+  if path.blank?
+    r = {}
+    return cancelled unless get_input("Please enter file name",:fn,r,1)
+    path = r[:fn]
   end
+  f = File.expand_path(path)
+  CSV.open(f, 'w') do |csv_object|
+    # write header line
+    
+    $file_reader.content.each do |o|
+    end
+
+  end
+
+end
+
+def saveFileGJ(path=nil)
+  return unless $file_reader
+  if path.blank?
+    r = {}
+    return cancelled unless get_input("Please enter file name",:fn,r,1)
+    path = r[:fn]
+  end
+  f = File.expand_path(path)
+  File.open(f,"w") do |fd|
+    fd.write('{"type": "FeatureCollection", "crs": {"type": "EPSG", "properties": { "code": "' + $file_hash[:srid].to_s + '" } }, "features": [')
+    started = false
+    $file_reader.content.each do |o|
+      fd.write(started ? ",\n" : "\n")
+      started = true
+      fd.write(formatObject(o).to_json)
+    end
+    fd.write("\n] }\n")
+  end
+  outMessage("JSON file written: #{f}.")
 end
 
 
@@ -167,22 +198,10 @@ def formatObject(o)
     tp = {}
     # log JSON.pretty_generate($file_hash)
     o[:properties][:data].each do |k,v|
-      if $file_hash[:fields].include?(k) 
-        k2 = $file_hash[:alternate_fields][k]
-        k2 = k if k2.blank?
-        tp[k2] = v 
-      end
+      k2 = $file_hash[:alternate_fields][k]
+      tp[k2] = v if !k2.blank?
     end
-    o[:properties][:data] = tp
-    
-    if $file_hash[:srid] and $file_hash[:srid] != 4326
-      o[:crs] = {
-        type: 'EPSG',
-        properties: {
-          code: $file_hash[:srid]
-        }
-      }
-    end
+    o[:properties] = tp
   rescue => e
     sherror("Error: #{e.message}")
   end
@@ -211,6 +230,8 @@ end
 
 def fileSummary(vp)
   
+  $outwin.clear
+
   $outwin.setpos(vp+=1,0)
   $outwin.addstr sprintf("%14s #{$file_hash[:file_path]}", "file:")
 
@@ -234,7 +255,8 @@ def fileSummary(vp)
     $outwin.setpos(vp+=1,0)
     $outwin.addstr sprintf("%14s found in %s; srid: #{$file_hash[:srid]}","geometry:",$file_hash[:hasgeometry])
   end
-  vp
+  
+  $outwin.refresh
 end
 
 def loadFile(filePath=nil)
@@ -246,22 +268,23 @@ def loadFile(filePath=nil)
     $file_hash[:file_path] = filePath
   end
 
-  # begin
+  begin
 
-    $file_hash[:keep_geom] = true
+    $file_hash[:keep_geom] = false
     $file_reader = FileReader.new($file_hash)
+    loadConfig
 
     if !$file_hash[:fields].blank? and $file_hash[:fields][$file_hash[:fields].length-1] == nil
       $file_hash[:fields] = $file_hash[:fields].clip
     end
     
     if $outwin
-      fileSummary(0)
-      $outwin.refresh
+      fileSummary(1)
     end
-  # rescue => e
-  #   sherror("Error reading file: #{e.inspect}")
-  # end
+  rescue => e
+    sherror("Error reading file: #{e.inspect}")
+  end
+
 end
 
 def editFields
@@ -529,7 +552,7 @@ def sherror(e)
 end
 
 def log(m)
-  File.open(File.expand_path('~/fa.log'), "a")  do |f|
+  File.open(File.expand_path('~/.xdata/xdata.log'), "a")  do |f|
     f.write("#{m}\n")
   end
 end
@@ -556,10 +579,14 @@ def outObject(o,v,h)
 end
 
 def outMessage(m)
-  $outwin.clear
-  $outwin.setpos(1,0)
-  $outwin.addstr m
-  $outwin.refresh
+  if $outwin
+    $outwin.clear
+    $outwin.setpos(1,0)
+    $outwin.addstr m
+    $outwin.refresh
+  else
+    STDERR.puts m
+  end
 end
 
 
@@ -579,8 +606,9 @@ $fileMenu = Menu.new( [
   MenuItem.new('2','rename fields', lambda{editFields}),
   MenuItem.new('3','show sample', lambda{showSample}),
   MenuItem.new('4','assign geom columns', lambda { assignGeometry }),
-  MenuItem.new('s','save processed file', lambda { saveFile }),
-  MenuItem.new('c','save config', lambda { saveConfig }),
+  MenuItem.new('s','file summary', lambda { fileSummary(1) }),
+  MenuItem.new('g','save (geo)json', lambda { saveFileGJ }),
+  MenuItem.new('c','save csv', lambda { saveConfig }),
   MenuItem.new('q','exit', lambda { doExit } )
 ])
 
@@ -631,8 +659,10 @@ opts.each do |opt, arg|
   end
 end
 
+FileUtils.mkdir_p(File.expand_path('~') + '/' + ".xdata")
+
 $file = ARGV.shift if (ARGV.length == 1)
-loadFile($file) if $file
+loadFile($file) 
 
 
 if $command.blank?
