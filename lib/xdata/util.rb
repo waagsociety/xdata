@@ -45,8 +45,7 @@ module XData
     end
     return { type: 'Polygon', coordinates: [[lon1,lat1], [lon1,lat2], [lon2,lat2], [lon2,lat1], [lon1,lat1]] }
   end
-  
-  
+
   def self.rd_to_wgs84(x,y)
     srcPoint = Proj4::Point.new(x, y)
     dstPoint = RD_P.transform(LL_P, srcPoint)

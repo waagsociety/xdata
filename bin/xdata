@@ -625,7 +625,13 @@ end
 
 
 def printHelp
-  STDERR.puts 'HELP!'
+  STDERR.puts "xdata: Metadata extraction and manipulation tool."
+  STDERR.puts "work in progress"
+  STDERR.puts 
+  STDERR.puts "xdata file|url                --- load data in interactive mode"
+  STDERR.puts "xdata -b [--bounds]  file|url --- determine bounding box of data"
+  STDERR.puts "xdata -s [--summary] file|url --- summarize (meta)data"
+  STDERR.puts "xdata -h [--help]             --- this message"
   doExit
 end
 
@@ -667,10 +673,7 @@ opts.each do |opt, arg|
 end
 
 FileUtils.mkdir_p(File.expand_path('~') + '/' + ".xdata")
-
-
 loadFile(ARGV[0]) if (ARGV.length == 1)
-
 
 if $command.blank?
   init_screen
@@ -689,8 +692,7 @@ else
     else
       STDERR.puts "No geography or postcodes found in file."
     end
-  else
-    exit(-1)
   end
+  exit(-1)
 end
 
