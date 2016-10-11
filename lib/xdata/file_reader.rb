@@ -1,6 +1,5 @@
 require 'csv'
 require 'cgi'
-require 'rgeo'
 require 'tmpdir'
 require 'feedjira'
 require 'geo_ruby'
@@ -13,8 +12,7 @@ require 'open-uri'
 
 # wgs84_factory = RGeo::Geographic.spherical_factory(:srid => 4326, :proj4 => wgs84_proj4, :coord_sys => wgs84_wkt)
 
-
-# feature = source_factory.point(1266457.58, 230052.50)
+# feature = rd_factory.point(131712.93,456415.20)
 # feature = RGeo::Feature.cast(feature,:factory => wgs84_factory, :project => true)
 
 # factory = RGeo::Geographic.projected_factory(:projection_proj4 => '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +units=m +no_defs ')
@@ -41,7 +39,6 @@ module XData
       find_unique_field   unless @params[:unique_id]
       get_address         unless @params[:hasaddress]
       findExtends         unless @params[:bounds]
-      set_id_name
     end
     
     def odata_json(url)
@@ -132,23 +129,6 @@ module XData
       end
       @params[:postcode] = pc
       @params[:housenumber] = hn ? hn : ad
-    end
-
-    def set_id_name
-      count = 123456
-      if @params[:unique_id]
-        @content.each do |h|
-          h[:properties][:id] = h[:properties][:data][@params[:unique_id]]
-          h[:properties][:title] = h[:properties][:data][@params[:name]] if @params[:name]
-        end
-      else
-        @params[:unique_id] = :xdata_gen
-        @content.each do |h|
-          h[:properties][:id] = "cg_#{count}"
-          h[:properties][:title] = h[:properties][:data][@params[:name]] if @params[:name]
-          count += 1
-        end
-      end
     end
 
     def find_unique_field
@@ -295,7 +275,7 @@ module XData
           geometries << Geometry.from_geojson(o[:geometry].to_json)
         end
         geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
-        @params[:bounds] = geom.bounding_box()
+        @params[:bounds] = XData.toPolygon(geom.bounding_box())
       elsif @params[:postcode]
         pc = @params[:postcode].to_sym
         @content.each do |o|
@@ -306,7 +286,7 @@ module XData
           end
         end
         geom = GeometryCollection.from_geometries(geometries, (@params[:srid] || '4326'))
-        @params[:bounds] = geom.bounding_box()
+        @params[:bounds] = XData.toPolygon(geom.bounding_box())
       end
     end
     
@@ -408,9 +388,7 @@ module XData
           c = fd.read
         end
       end
-      
-      STDERR.puts "CSV"
-      
+
       unless @params[:utf8_fixed]
         detect = CharlockHolmes::EncodingDetector.detect(c)
         c =	CharlockHolmes::Converter.convert(c, detect[:encoding], 'UTF-8') if detect
@@ -591,10 +569,32 @@ module XData
       end
       begin 
         feed = Feedjira::Feed.parse(data)
-        url = feed.entries[0].url
-        Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
-          f = dir + '/' + File.basename(path)
+        if feed 
+          maxlat = -1000
+          maxlon = -1000
+          minlat = 1000
+          minlon = 1000
+          doc = Nokogiri::XML data
+          a = doc.xpath("//georss:polygon")
+          if a.length > 0
+            # geometries << GeoRuby::SimpleFeatures::Point..from_latlong(lat, lon)
+            a.each do |x|
+              # 50.6 3.1 50.6 7.3 53.7 7.3 53.7 3.1 50.6 3.1
+              s = x.text.split(/\s+/)
+              s.each_slice(2) { |c| 
+                maxlat = [maxlat,c[0].to_f].max
+                maxlon = [maxlon,c[1].to_f].max
+                minlat = [minlat,c[0].to_f].min
+                minlon = [minlon,c[1].to_f].min
+              }
+            end
+            @params[:bounds] = { type: 'Polygon', coordinates: [[minlon,minlat], [minlon,maxlat], [maxlon,maxlat], [maxlon,minlat], [minlon,minlat]] }
+          end
         end
+        # url = feed.entries[0].url
+        # Dir.mktmpdir("xdfi_#{File.basename(path).gsub(/\A/,'')}") do |dir|
+        #   f = dir + '/' + File.basename(path)
+        # end
       rescue Exception => e
         puts e.inspect
         return -1

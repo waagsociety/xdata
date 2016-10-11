@@ -5,5 +5,6 @@ gemspec
 
 gem 'georuby'
 gem 'rgeo'
+gem 'rgeo-geojson'
 gem 'charlock_holmes'
 gem 'feedjira'

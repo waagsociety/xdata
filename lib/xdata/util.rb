@@ -1,5 +1,6 @@
 require 'json'
 require 'i18n'
+require 'proj4'
 require 'net/http'
 require 'net/https'
 
@@ -26,12 +27,37 @@ end
 
 module XData
   ::I18n.enforce_available_locales = false
+  RD_P = Proj4::Projection.new('+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +units=m +no_defs')
+  LL_P = Proj4::Projection.new('+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs')
+  
+  def toPolygon(twopoints)
+    lon1 = twopoints[0].lon
+    lat1 = twopoints[0].lat
+    lon2 = twopoints[1].lon
+    lat2 = twopoints[1].lat
+    
+    if lon1.between?(-7000.0,300000.0) and lat1.between?(289000.0,629000.0)
+      # Simple minded check for Dutch new rd system
+      a = XData.rd_to_wgs84(lon1,lat1)
+      lon1 = a[0]; lat1 = a[1]
+      a = XData.rd_to_wgs84(lon2,lat2)
+      lon2 = a[0]; lat2 = a[1]
+    end
+    return { type: 'Polygon', coordinates: [[lon1,lat1], [lon1,lat2], [lon2,lat2], [lon2,lat1], [lon1,lat1]] }
+  end
+  
+  
+  def self.rd_to_wgs84(x,y)
+    srcPoint = Proj4::Point.new(x, y)
+    dstPoint = RD_P.transform(LL_P, srcPoint)
+    [dstPoint.lon * (180 / Math::PI), dstPoint.lat * (180 / Math::PI)]
+  end
 
   def self.headers(url)
     begin
       uri = URI(url)
       http = Net::HTTP.new(uri.host, uri.port)
-      if url =~ /^https:\/\//i
+      if url.scheme == 'https'
         http.use_ssl = true
         http.verify_mode = OpenSSL::SSL::VERIFY_NONE
       end

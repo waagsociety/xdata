@@ -3,12 +3,14 @@
 require "yaml"
 require "curses"
 require "getoptlong"
+require 'rgeo/geo_json'
 include Curses
 require_relative '../lib/xdata.rb'
 include XData 
 
 include GeoRuby::SimpleFeatures
 
+# $wkt = RGeo::WKRep::WKTGenerator.new
 
 $outheight = 0
 $outwidth = 0
@@ -161,14 +163,28 @@ def saveFileCSV(path=nil)
     path = r[:fn]
   end
   f = File.expand_path(path)
+  
+  headers = $file_hash[:alternate_fields].values.compact
+  headers << 'geom' if $file_hash[:hasgeometry]
+  
   CSV.open(f, 'w') do |csv_object|
     # write header line
-    
+    csv_object << headers
+
     $file_reader.content.each do |o|
+      a = []
+      o[:properties][:data].each do |k,v|
+        k2 = $file_hash[:alternate_fields][k]
+        a << v if !k2.blank?
+      end
+      if $file_hash[:hasgeometry]
+        geom = RGeo::GeoJSON.decode(o[:geometry].to_json, {:json_parser => :json})
+        a << geom.as_text  
+      end
+       csv_object << a
     end
-
   end
-
+  outMessage("CSV file written: #{f}.")
 end
 
 def saveFileGJ(path=nil)
@@ -185,7 +201,9 @@ def saveFileGJ(path=nil)
     $file_reader.content.each do |o|
       fd.write(started ? ",\n" : "\n")
       started = true
-      fd.write(formatObject(o).to_json)
+      a = formatObject(o)
+      a["type"] = "Feature"
+      fd.write(a.to_json)
     end
     fd.write("\n] }\n")
   end
@@ -327,17 +345,6 @@ def assignGeometry
   fileSummary(1)
   $outwin.refresh
 end
-
-def assignAddress
-  list = $layer[:fields].map {|f| f[:name]}
-  $outwin.clear
-  x = get_input_from_list('please select x (longitude) field: ', list , 3)
-  y = get_input_from_list('       select y (latitude) field: ', list , 3)
-  unless (x.blank? and y.blank?)
-  end
-end
-
-
 
 def getFieldHeader(v,h,s,f)
   a = ''
@@ -608,7 +615,7 @@ $fileMenu = Menu.new( [
   MenuItem.new('4','assign geom columns', lambda { assignGeometry }),
   MenuItem.new('s','file summary', lambda { fileSummary(1) }),
   MenuItem.new('g','save (geo)json', lambda { saveFileGJ }),
-  MenuItem.new('c','save csv', lambda { saveConfig }),
+  MenuItem.new('c','save csv', lambda { saveFileCSV }),
   MenuItem.new('q','exit', lambda { doExit } )
 ])
 
@@ -661,8 +668,8 @@ end
 
 FileUtils.mkdir_p(File.expand_path('~') + '/' + ".xdata")
 
-$file = ARGV.shift if (ARGV.length == 1)
-loadFile($file) 
+
+loadFile(ARGV[0]) if (ARGV.length == 1)
 
 
 if $command.blank?
