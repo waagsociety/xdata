@@ -22,6 +22,7 @@ Gem::Specification.new do |gem|
   gem.add_dependency('dbf', '~> 2.0')
   gem.add_dependency('georuby', '~> 2.0')
   gem.add_dependency('rgeo', '~> 0.5')
+  gem.add_dependency('proj4rb', '~> 1.0')
   gem.add_dependency('charlock_holmes', '~> 0.6')
   gem.add_dependency('curses', '~> 1.0')
   
